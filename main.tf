@@ -1,109 +1,113 @@
-# VPC
-resource "aws_vpc" "main" {
-  cidr_block           = "10.0.0.0/16"
-  enable_dns_hostnames = true
-  enable_dns_support   = true
-
-  tags = {
-    Name = "main-vpc"
-  }
+# Resource Group
+resource "azurerm_resource_group" "main" {
+  name     = "main-rg"
+  location = "East US"
 }
 
-# Internet Gateway
-resource "aws_internet_gateway" "main" {
-  vpc_id = aws_vpc.main.id
-
+# Virtual Network
+resource "azurerm_virtual_network" "main" {
+  name                = "main-vnet"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
   tags = {
-    Name = "main-igw"
+    Name = "main-vnet"
   }
 }
 
 # Public Subnet
-resource "aws_subnet" "public" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
-  availability_zone       = data.aws_availability_zones.available.names[0]
-  map_public_ip_on_launch = true
+resource "azurerm_subnet" "public" {
+  name                 = "public-subnet"
+  resource_group_name  = azurerm_resource_group.main.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+# Public IP
+resource "azurerm_public_ip" "main" {
+  name                = "main-public-ip"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  allocation_method   = "Static"
+  tags = {
+    Name = "main-public-ip"
+  }
+}
+
+# Network Security Group
+resource "azurerm_network_security_group" "instance" {
+  name                = "instance-nsg"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+
+  security_rule {
+    name                       = "SSH"
+    priority                   = 1001
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+  tags = {
+    Name = "instance-nsg"
+  }
+}
+
+# Network Interface
+resource "azurerm_network_interface" "main" {
+  name                = "main-nic"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.public.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.main.id
+  }
 
   tags = {
-    Name = "public-subnet"
+    Name = "main-nic"
   }
 }
 
-# Route Table
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main.id
-  }
-
-  tags = {
-    Name = "public-rt"
-  }
+# Network Interface Security Group Association
+resource "azurerm_network_interface_security_group_association" "main" {
+  network_interface_id      = azurerm_network_interface.main.id
+  network_security_group_id = azurerm_network_security_group.instance.id
 }
 
-# Route Table Association
-resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
-  route_table_id = aws_route_table.public.id
-}
+# Virtual Machine
+resource "azurerm_linux_virtual_machine" "main" {
+  name                = "main-vm"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  size                = "Standard_B1s"
+  admin_username      = "azureuser"
 
-# Security Group
-resource "aws_security_group" "instance" {
-  name        = "instance-sg"
-  description = "Security group for EC2 instance"
-  vpc_id      = aws_vpc.main.id
+  network_interface_ids = [
+    azurerm_network_interface.main.id,
+  ]
 
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file("~/.ssh/id_rsa.pub")
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
   }
 
-  tags = {
-    Name = "instance-sg"
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts"
+    version   = "latest"
   }
-}
-
-# Data source for availability zones
-data "aws_availability_zones" "available" {
-  state = "available"
-}
-
-# Data source for latest Amazon Linux 2 AMI
-data "aws_ami" "amazon_linux_2" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
-# EC2 Instance
-resource "aws_instance" "main" {
-  ami                    = data.aws_ami.amazon_linux_2.id
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.public.id
-  vpc_security_group_ids = [aws_security_group.instance.id]
-
   tags = {
     Name = "main-instance"
   }
@@ -111,11 +115,11 @@ resource "aws_instance" "main" {
 
 # Outputs
 output "instance_id" {
-  description = "ID of the EC2 instance"
-  value       = aws_instance.main.id
+  description = "ID of the VM"
+  value       = azurerm_linux_virtual_machine.main.id
 }
 
 output "instance_public_ip" {
-  description = "Public IP of the EC2 instance"
-  value       = aws_instance.main.public_ip
+  description = "Public IP of the VM"
+  value       = azurerm_public_ip.main.ip_address
 }
