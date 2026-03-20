@@ -1,4 +1,4 @@
-name: Terraform Apply
+name: Terraform Deploy
 
 on:
   workflow_run:
@@ -7,6 +7,7 @@ on:
       - completed
     branches:
       - main
+  workflow_dispatch:
 
 env:
   TF_VERSION: "1.5.0"
@@ -18,10 +19,59 @@ env:
   BACKEND_DYNAMODB_TABLE: ${{ secrets.BACKEND_DYNAMODB_TABLE }}
 
 jobs:
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.BACKEND_BUCKET }}" \
+            -backend-config="key=${{ env.BACKEND_KEY }}" \
+            -backend-config="region=${{ env.BACKEND_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.BACKEND_DYNAMODB_TABLE }}"
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Convert Plan to JSON
+        run: terraform show -json tfplan > tfplan.json
+
+      - name: Display Plan JSON
+        run: |
+          echo "Terraform Plan Summary:"
+          cat tfplan.json | jq -r '.resource_changes[] | "\(.change.actions | join(",")) \(.type).\(.name)"'
+
+      - name: Upload Plan
+        uses: actions/upload-artifact@v3
+        with:
+          name: tfplan
+          path: |
+            tfplan
+            tfplan.json
+          retention-days: 5
+
   apply:
     name: Terraform Apply
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    needs: plan
+    if: github.event_name == 'workflow_dispatch'
     environment: production
     steps:
       - name: Checkout code
@@ -51,13 +101,6 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           name: tfplan
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
-
-      - name: Display Plan JSON
-        run: |
-          echo "Terraform Plan Summary:"
-          cat tfplan.json | jq -r '.resource_changes[] | "\(.change.actions | join(",")) \(.type).\(.name)"'
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
