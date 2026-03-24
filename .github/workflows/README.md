@@ -12,6 +12,84 @@ All workflows authenticate with Azure using Service Principal credentials stored
 
 ---
 
+## ⚠️ PREREQUISITES & REQUIRED SETUP
+
+**IMPORTANT:** Before any workflows can execute, you must complete this setup. Without these prerequisites, all workflows will fail with authentication errors.
+
+### 🔐 Required GitHub Secrets (8 Total)
+
+| Secret Name | Value | Source | Status |
+|-------------|-------|--------|--------|
+| `ARM_CLIENT_ID` | Service Principal Client ID | Azure Portal | ✅ Required |
+| `ARM_CLIENT_SECRET` | Service Principal Client Secret | Azure Portal | ✅ Required |
+| `ARM_SUBSCRIPTION_ID` | Azure Subscription ID | Azure Portal | ✅ Required |
+| `ARM_TENANT_ID` | Azure Tenant/Directory ID | Azure Portal | ✅ Required |
+| `BACKEND_RESOURCE_GROUP` | Resource Group for Terraform state | Azure Portal | ✅ Required |
+| `BACKEND_STORAGE_ACCOUNT` | Storage Account name for state | Azure Portal | ✅ Required |
+| `BACKEND_CONTAINER_NAME` | Container name in storage account | Azure Portal | ✅ Required |
+| `BACKEND_KEY` | State file blob name | Any (e.g., `terraform.tfstate`) | ✅ Required |
+
+### 📝 How to Add Secrets to GitHub
+
+1. Go to **Repository Settings** → **Secrets and variables** → **Actions**
+2. Click **New repository secret**
+3. Enter the secret name from the table above
+4. Paste the value from Azure Portal
+5. Click **Add secret**
+6. **Repeat for all 8 secrets**
+
+### 🔑 Service Principal Authentication Configuration
+
+All workflows use this authentication payload:
+
+```json
+{
+  "clientId": "${{ secrets.ARM_CLIENT_ID }}",
+  "clientSecret": "${{ secrets.ARM_CLIENT_SECRET }}",
+  "subscriptionId": "${{ secrets.ARM_SUBSCRIPTION_ID }}",
+  "tenantId": "${{ secrets.ARM_TENANT_ID }}"
+}
+```
+
+**What This Does:**
+- Authenticates GitHub Actions runner to Azure
+- Uses Service Principal (not interactive login)
+- Scoped to specific Azure subscription
+- Credentials stored securely (never exposed in logs)
+
+### 💾 Terraform Backend Configuration
+
+All workflows initialize Terraform with this backend config:
+
+```bash
+terraform init \\
+  -backend-config=\"resource_group_name=${{ BACKEND_RESOURCE_GROUP }}\" \\
+  -backend-config=\"storage_account_name=${{ BACKEND_STORAGE_ACCOUNT }}\" \\
+  -backend-config=\"container_name=${{ BACKEND_CONTAINER_NAME }}\" \\
+  -backend-config=\"key=${{ BACKEND_KEY }}\"
+```
+
+**Backend Type:** Azure Storage Account
+
+**What This Does:**
+- Stores Terraform state in Azure Storage Account (not locally)
+- Enables team collaboration (prevents concurrent modifications)
+- Provides audit trail of infrastructure changes
+- Keeps sensitive data out of Git repository
+
+### ✅ Pre-Deployment Checklist
+
+Before deploying, verify:
+
+- [ ] All 8 GitHub Secrets are configured correctly
+- [ ] Service Principal has permissions to Azure subscription
+- [ ] Azure Storage Account exists for Terraform state
+- [ ] Storage Account container exists for state files
+- [ ] GitHub environments are created (`production`, `production-destroy`)
+- [ ] Branch protection rules configured on `main`
+
+---
+
 ## 🔄 Complete Pipeline Flow
 
 ```
@@ -103,17 +181,6 @@ Validate Terraform code syntax, format, and configuration before any changes are
 - ❌ Error messages displayed in GitHub PR checks
 - ❌ Developer must fix issues and push again
 
-### 🔧 Backend Configuration
-```bash
-terraform init \
-  -backend-config="resource_group_name=${{ BACKEND_RESOURCE_GROUP }}" \
-  -backend-config="storage_account_name=${{ BACKEND_STORAGE_ACCOUNT }}" \
-  -backend-config="container_name=${{ BACKEND_CONTAINER_NAME }}" \
-  -backend-config="key=${{ BACKEND_KEY }}"
-```
-
-**Backend Type:** Azure Storage Account (for remote state management)
-
 ---
 
 ## 📊 Workflow 2: Plan & Deploy (`plan-deploy.yaml`)
@@ -124,8 +191,6 @@ terraform init \
 
 ### 🎯 Purpose
 Generate and execute Terraform execution plan to deploy changes to Azure.
-
----
 
 ### 📋 Job 1: Plan
 
@@ -258,7 +323,7 @@ Generate Destroy Plan
 Approval Required
     ├─ Review `production-destroy` environment
     ├─ Confirm intention
-    └─ Click "Approve and deploy"
+    └─ Click \"Approve and deploy\"
     ↓
 Execute Destruction
     ├─ Delete all resources in order
@@ -268,65 +333,6 @@ Execute Destruction
 ☁️ Azure Infrastructure Destroyed
     └─ Resource Group may remain (if not managed by Terraform)
 ```
-
----
-
-## 🔐 Shared Configuration
-
-### Environment Variables (All Workflows)
-
-```bash
-# Terraform
-TF_VERSION = "1.5.0"
-
-# Azure Authentication
-ARM_CLIENT_ID = ${{ secrets.ARM_CLIENT_ID }}
-ARM_CLIENT_SECRET = ${{ secrets.ARM_CLIENT_SECRET }}
-ARM_SUBSCRIPTION_ID = ${{ secrets.ARM_SUBSCRIPTION_ID }}
-ARM_TENANT_ID = ${{ secrets.ARM_TENANT_ID }}
-
-# Terraform Backend
-BACKEND_RESOURCE_GROUP = ${{ secrets.BACKEND_RESOURCE_GROUP }}
-BACKEND_STORAGE_ACCOUNT = ${{ secrets.BACKEND_STORAGE_ACCOUNT }}
-BACKEND_CONTAINER_NAME = ${{ secrets.BACKEND_CONTAINER_NAME }}
-BACKEND_KEY = ${{ secrets.BACKEND_KEY }}
-```
-
-### Azure Service Principal Authentication
-
-```json
-{
-  "clientId": "${{ secrets.ARM_CLIENT_ID }}",
-  "clientSecret": "${{ secrets.ARM_CLIENT_SECRET }}",
-  "subscriptionId": "${{ secrets.ARM_SUBSCRIPTION_ID }}",
-  "tenantId": "${{ secrets.ARM_TENANT_ID }}"
-}
-```
-
-**What This Does:**
-- Authenticates GitHub Actions runner to Azure
-- Uses Service Principal (not interactive login)
-- Scoped to specific subscription
-- Credentials stored securely as GitHub Secrets
-
-### Terraform Backend (Azure Storage)
-
-```hcl
-terraform {
-  backend "azurerm" {
-    resource_group_name  = "rg-terraform"
-    storage_account_name = "tfstate123"
-    container_name       = "tfstate"
-    key                  = "terraform.tfstate"
-  }
-}
-```
-
-**What This Does:**
-- Stores Terraform state in Azure Storage Account
-- Enables team collaboration
-- Prevents concurrent modifications
-- Provides audit trail of changes
 
 ---
 
@@ -361,41 +367,16 @@ git push origin feature/add-app-service
 
 ```bash
 # 1. Go to GitHub Actions tab
-# 2. Select "Terraform Destroy" workflow
-# 3. Click "Run workflow"
+# 2. Select \"Terraform Destroy\" workflow
+# 3. Click \"Run workflow\"
 # 4. Confirm branch: main
-# 5. Click "Run workflow"
+# 5. Click \"Run workflow\"
 # 6. Wait for approval prompt
 # 7. Review action details
-# 8. Click "Approve and deploy"
+# 8. Click \"Approve and deploy\"
 # 9. Destruction begins
 # 10. ☁️ Azure resources deleted
 ```
-
----
-
-## 🔐 GitHub Secrets Setup
-
-### Required Secrets
-
-| Secret Name | Value | Source |
-|-------------|-------|--------|
-| `ARM_CLIENT_ID` | Service Principal Client ID | Azure Portal |
-| `ARM_CLIENT_SECRET` | Service Principal Password | Azure Portal |
-| `ARM_SUBSCRIPTION_ID` | Azure Subscription ID | Azure Portal |
-| `ARM_TENANT_ID` | Azure Tenant/Directory ID | Azure Portal |
-| `BACKEND_RESOURCE_GROUP` | RG for Terraform state | Azure Portal |
-| `BACKEND_STORAGE_ACCOUNT` | Storage account name | Azure Portal |
-| `BACKEND_CONTAINER_NAME` | Container in storage | Azure Portal |
-| `BACKEND_KEY` | State file name | Can be `terraform.tfstate` |
-
-### How to Add Secrets
-
-1. Go to Repository Settings
-2. Click **Secrets and variables** → **Actions**
-3. Click **New repository secret**
-4. Enter name and value
-5. Click **Add secret**
 
 ---
 
