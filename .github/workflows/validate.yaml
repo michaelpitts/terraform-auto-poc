@@ -32,6 +32,15 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: Debug Secrets (check if set)
+        run: |
+          echo "Tenant ID length: ${#ARM_TENANT_ID}"
+          echo "Client ID length: ${#ARM_CLIENT_ID}"
+          echo "Subscription ID length: ${#ARM_SUBSCRIPTION_ID}"
+          echo "Client Secret length: ${#ARM_CLIENT_SECRET}"
+          if [ -z "$ARM_TENANT_ID" ]; then echo "TENANT_ID IS EMPTY"; fi
+          if [ -z "$ARM_CLIENT_ID" ]; then echo "CLIENT_ID IS EMPTY"; fi
+
       - name: Azure Login
         uses: azure/login@v1
         with:
